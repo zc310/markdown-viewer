@@ -60,11 +60,48 @@ wails build
 wails build --platform linux/amd64 --tags webkit2_41
 ```
 
+也可以使用 Makefile 编译并制作 ZIP 包：
+
+```bash
+# 编译 Linux 和 Windows amd64 程序
+make build
+
+# 编译 Linux、Windows、Windows Installer，并生成 ZIP 包
+make package
+```
+
+生成文件：
+
+```text
+dist/markdown-viewer-linux-amd64.zip
+dist/markdown-viewer-windows-amd64.zip
+dist/markdown-viewer-windows-amd64-installer.zip
+```
+
+直接执行 `make` 与 `make package` 相同，会默认编译两个平台、制作 Windows NSIS 安装程序，并生成以上三个 ZIP 包。
+
+如果 `wails` 不在 PATH 中，可以指定 CLI 路径：
+
+```bash
+make WAILS=/path/to/wails package
+```
+
+Linux 版本使用 `webkit2_41`，运行目标系统需要安装 WebKitGTK 4.1 和 libsoup 3；Windows 版本需要 WebView2 Runtime。Windows Installer 构建还需要安装 NSIS，并确保 `makensis` 位于 PATH 中。
+
 构建 Windows 安装程序：
 
 ```bash
 wails build --platform windows/amd64 --nsis
 ```
+
+使用 Makefile 制作 Windows Installer：
+
+```bash
+make build-windows-installer
+make package-windows-installer
+```
+
+安装程序输出为 `build/bin/markdown-viewer-amd64-installer.exe`，ZIP 包输出为 `dist/markdown-viewer-windows-amd64-installer.zip`。
 
 Windows 安装程序已经配置 `.md` 和 `.markdown` 文件关联；macOS 的 App 包含对应的文档类型元数据。Linux 目前提供可执行文件和启动参数支持，桌面环境的 `.desktop` 注册需要随发行版安装方式补充。
 
