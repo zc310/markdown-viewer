@@ -10,6 +10,8 @@
 - 导出当前 Markdown 文档为 PDF
 - 拖放文件、`Ctrl/Cmd+O` 打开文件
 - 标题、列表、任务列表、表格、引用、代码块和行内格式
+- 使用 `markdown-it` 解析 Markdown，支持常用代码块语法高亮和复制代码
+- 根据 Markdown 标题在左侧显示文档导航，可点击标题快速跳转，并可通过工具栏开关显示/隐藏
 - 相对路径图片和 Markdown 文档链接
 - 支持跨父级目录的相对图片路径，例如 `../../docs/screenshots/viewer/linux.png`
 - 外部 HTTP/HTTPS 链接使用系统浏览器打开
@@ -21,7 +23,7 @@
 
 - Go 1.25+
 - Wails CLI v2.15+
-- 使用 `wails dev` 开发前端需要 Node.js/npm
+- 前端构建和 `wails dev` 需要 Node.js 20.19+ / npm
 - Linux 构建使用 Wails 的 `webkit2_41` 构建标签，需要 GTK3、WebKitGTK 4.1 和 libsoup 3 开发包
 
 Wails CLI 不在系统 PATH 时，可以直接使用：
@@ -46,12 +48,19 @@ Wails 应用开发：
 wails dev
 ```
 
-当前仓库同时提供 `frontend/static` 作为无 Node 环境下的生产前端副本。Wails 构建前会运行 `frontend/build.go`，把它复制到 `frontend/dist`，然后由 Go 的 `embed.FS` 打包进应用。这样生产构建不依赖 npm；`frontend/src` 保留给需要 Vite 热更新的开发流程。
+前端使用 Vite 构建，`markdown-it` 会被打包进应用。Wails 构建前会执行 `npm install` 和 `npm run build`，生成的 `frontend/dist` 随后由 Go 的 `embed.FS` 打包进应用。
 
 ## 构建
 
 ```bash
 wails build
+```
+
+首次构建或依赖更新后，请先安装前端依赖：
+
+```bash
+cd frontend
+npm install
 ```
 
 项目配置已经默认加入 `webkit2_41` 标签，Linux 构建等价于：
@@ -104,5 +113,7 @@ make package-windows-installer
 安装程序输出为 `build/bin/markdown-viewer-amd64-installer.exe`，ZIP 包输出为 `dist/markdown-viewer-windows-amd64-installer.zip`。
 
 Windows 安装程序已经配置 `.md` 和 `.markdown` 文件关联；macOS 的 App 包含对应的文档类型元数据。Linux 目前提供可执行文件和启动参数支持，桌面环境的 `.desktop` 注册需要随发行版安装方式补充。
+
+代码块使用 fenced code 的语言标记进行高亮，例如 ```` ```go ````；未标记语言或不支持的语言会以普通代码显示。打开文档后点击代码块右上角的 `复制` 按钮即可复制代码。
 
 打开文档后点击工具栏中的 `PDF` 按钮，会打开系统打印对话框。选择 `Print to PDF` 或 `另存为 PDF` 即可导出当前文档。

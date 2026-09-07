@@ -3,8 +3,8 @@
   "name": "markdown-viewer",
   "outputfilename": "markdown-viewer",
   "build:tags": "webkit2_41",
-  "frontend:install": "go run build.go",
-  "frontend:build": "go run build.go",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {

@@ -1,5 +1,6 @@
 import {ExportPDF, InitialPath, OpenFile, OpenExternal, PendingPaths, ReadAsset, ReadDocument, ResolveDocumentLink, StartWatching, StopWatching} from '../wailsjs/go/main/App';
 import {EventsOn, OnFileDrop, BrowserOpenURL, WindowSetTitle} from '../wailsjs/runtime/runtime.js';
+import MarkdownIt from 'markdown-it';
 import './style.css';
 import './app.css';
 
@@ -18,6 +19,8 @@ const state = {
     path: '',
     document: null,
     tabs: [],
+    outline: [],
+    outlineVisible: true,
     fontScale: 1,
     theme: localStorage.getItem('markdown-viewer-theme') || 'adw-everforest',
 };
@@ -34,6 +37,7 @@ app.innerHTML = `
             <div class="toolbar">
                 <button class="tool-button primary" id="open-button" title="打开文件 (Ctrl+O)"><span class="button-icon">+</span>打开</button>
                 <button class="tool-button" id="export-button" title="导出当前文档为 PDF" disabled><span class="button-icon">↓</span>PDF</button>
+                <button class="icon-button outline-toggle" id="outline-button" type="button" title="显示文档导航" aria-label="显示文档导航" aria-expanded="false" aria-pressed="false" hidden>☰</button>
                 <label class="theme-picker" title="选择主题">
                     <span class="theme-swatch" aria-hidden="true"></span>
                     <select id="theme-select" aria-label="选择主题">
@@ -46,6 +50,16 @@ app.innerHTML = `
         </header>
         <nav class="tabbar" id="tabbar" aria-label="已打开的文档" hidden></nav>
         <main class="workspace">
+            <aside class="document-outline" id="document-outline" hidden>
+                <div class="outline-header">
+                    <div>
+                        <div class="outline-kicker">ON THIS PAGE</div>
+                        <div class="outline-title">文档导航</div>
+                    </div>
+                    <button class="outline-close" id="outline-close" type="button" title="关闭文档导航" aria-label="关闭文档导航">×</button>
+                </div>
+                <nav class="outline-nav" id="outline-nav" aria-label="文档标题导航"></nav>
+            </aside>
             <section class="reader-panel" id="drop-target">
                 <div class="drop-hint" id="drop-hint">
                     <div class="empty-symbol">#</div>
@@ -81,10 +95,186 @@ const tabbar = document.querySelector('#tabbar');
 const themeSelect = document.querySelector('#theme-select');
 const backToTop = document.querySelector('#back-to-top');
 const exportButton = document.querySelector('#export-button');
+const outline = document.querySelector('#document-outline');
+const outlineNav = document.querySelector('#outline-nav');
+const outlineButton = document.querySelector('#outline-button');
+const outlineClose = document.querySelector('#outline-close');
 let lastScrollTop = 0;
 
 function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (character) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[character]));
+}
+
+const codeLanguageAliases = {
+    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', rs: 'rust',
+    sh: 'shell', bash: 'shell', zsh: 'shell', yml: 'yaml', html: 'markup',
+    xml: 'markup', svg: 'markup', cc: 'cpp', cp: 'cpp', cxx: 'cpp', hpp: 'cpp',
+    'c++': 'cpp', cs: 'csharp', 'c#': 'csharp', md: 'markdown', plaintext: 'text',
+};
+
+const codeLanguageLabels = {
+    text: 'Plain Text', javascript: 'JavaScript', typescript: 'TypeScript',
+    python: 'Python', go: 'Go', rust: 'Rust', ruby: 'Ruby', shell: 'Shell',
+    json: 'JSON', yaml: 'YAML', markup: 'HTML/XML', css: 'CSS', sql: 'SQL',
+    java: 'Java', c: 'C', cpp: 'C++', csharp: 'C#', dockerfile: 'Dockerfile',
+    diff: 'Diff', markdown: 'Markdown',
+};
+
+const slashCodeRules = [
+    ['comment', '//[^\n]*|/\\*[\\s\\S]*?\\*/'],
+    ['string', '`(?:\\\\.|[^`\\\\])*`|"(?:\\\\.|[^"\\\\])*"|' + "'(?:\\\\.|[^'\\\\])*'"],
+    ['number', '\\b(?:0[xX][\\da-fA-F]+|0[bB][01]+|(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?)\\b'],
+];
+const hashCodeRules = [
+    ['comment', '#[^\n]*'],
+    ['string', '"(?:\\\\.|[^"\\\\])*"|' + "'(?:\\\\.|[^'\\\\])*'"],
+    ['number', '\\b(?:0[xX][\\da-fA-F]+|0[bB][01]+|(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?)\\b'],
+];
+const sqlCodeRules = [
+    ['comment', '--[^\n]*|/\\*[\\s\\S]*?\\*/'],
+    ['string', "'(?:''|\\\\.|[^'])*'|\"(?:\"\"|\\\\.|[^\"])*\""],
+    ['number', '\\b(?:0[xX][\\da-fA-F]+|(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?)\\b'],
+];
+const markupCodeRules = [
+    ['comment', '<!--[\\s\\S]*?-->'],
+    ['tag', '</?[A-Za-z][^>]*?>'],
+    ['string', '"(?:\\\\.|[^"\\\\])*"|' + "'(?:\\\\.|[^'\\\\])*'"],
+    ['number', '\\b\\d+(?:\\.\\d+)?\\b'],
+];
+
+function codeProfile(keywords, types, rules = slashCodeRules) {
+    return {
+        keywords: new Set(keywords.split(' ').filter(Boolean).map((word) => word.toLowerCase())),
+        types: new Set(types.split(' ').filter(Boolean).map((word) => word.toLowerCase())),
+        literals: new Set('true false null undefined nan infinity none nil'.split(' ')),
+        rules,
+    };
+}
+
+const codeProfiles = {
+    javascript: codeProfile(
+        'as async await break case catch class const continue debugger default delete do else export extends finally for from function get if import in instanceof let new of return set static super switch throw try typeof var void while with yield',
+        'Array Boolean Date Error Function Map Math Number Object Promise RegExp Set String Symbol JSON console',
+    ),
+    typescript: codeProfile(
+        'as async await break case catch class const continue debugger default delete do else export extends finally for from function get if implements import in instanceof interface keyof let namespace new of private protected public readonly return set static super switch throw try typeof type var void while with yield',
+        'Array Boolean Date Error Function Map Math Number Object Promise RegExp Set String Symbol JSON console',
+    ),
+    go: codeProfile(
+        'break default func interface select case defer go map struct chan else goto package switch const fallthrough if range type continue for import return var',
+        'bool byte complex64 complex128 error float32 float64 int int8 int16 int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr any comparable',
+    ),
+    rust: codeProfile(
+        'as async await break const continue crate else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while dyn',
+        'bool char str i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f32 f64',
+    ),
+    python: codeProfile(
+        'and as assert async await break case class continue def del elif else except finally for from global if import in is lambda match nonlocal not or pass raise return try while with yield',
+        'bool bytes complex dict float frozenset int list object set str tuple type',
+        hashCodeRules,
+    ),
+    ruby: codeProfile(
+        'BEGIN END alias and begin break case class def defined do else elsif end ensure false for if in module next nil not or redo rescue retry return self super then true undef unless until when while yield',
+        'Array Hash Integer Float String Symbol Time',
+        hashCodeRules,
+    ),
+    shell: codeProfile(
+        'if then else elif fi for while in do done case esac function select time coproc return exit export local readonly declare source unset',
+        'true false',
+        hashCodeRules,
+    ),
+    json: codeProfile('', '', [
+        ['string', '"(?:\\\\.|[^"\\\\])*"'],
+        ['number', '-?\\b(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b'],
+    ]),
+    yaml: codeProfile('', '', hashCodeRules),
+    markup: codeProfile('', '', markupCodeRules),
+    css: codeProfile('important media supports import charset namespace layer', 'inherit initial unset none block inline flex grid absolute relative fixed sticky'),
+    sql: codeProfile(
+        'select from where and or not insert into values update set delete create alter drop table view index join inner left right full outer on as distinct group by order having limit offset union all null is in exists like between asc desc case when then else end primary key foreign references database',
+        'integer bigint decimal numeric real float double varchar char text date timestamp boolean',
+        sqlCodeRules,
+    ),
+    java: codeProfile(
+        'abstract assert break case catch class const continue default do else enum extends final finally for goto if implements import instanceof interface native new package private protected public return static strictfp super switch synchronized this throw throws transient try volatile while',
+        'boolean byte char double float int long short void String Object Integer Boolean',
+    ),
+    c: codeProfile(
+        'auto break case const continue default do else enum extern for goto if inline register restrict return sizeof static struct switch typedef union unsigned volatile while',
+        'char double float int long short void size_t uint8_t uint16_t uint32_t uint64_t',
+    ),
+    cpp: codeProfile(
+        'alignas alignof asm auto bool break case catch class const constexpr continue co_await co_return co_yield decltype default delete do else enum explicit export extern for friend goto if inline mutable namespace new noexcept nullptr operator private protected public register reinterpret_cast requires return static static_assert static_cast struct switch template this thread_local throw try typedef typeid typename union unsigned using virtual void volatile while',
+        'char double float int long short void size_t string vector map set',
+    ),
+    csharp: codeProfile(
+        'abstract as base bool break byte case catch char checked class const continue decimal default delegate do double else enum event explicit extern finally fixed float for foreach goto if implicit in int interface internal is lock long namespace new null object operator out override params private protected public readonly ref return sbyte sealed short sizeof stackalloc static string struct switch this throw try typeof uint ulong unchecked unsafe ushort using virtual void volatile while async await var',
+        'String Object DateTime Task List Dictionary',
+    ),
+    dockerfile: codeProfile(
+        'from as run cmd label maintainer expose env add copy entrypoint volume user workdir arg onbuild stopsignal healthcheck shell',
+        '',
+        hashCodeRules,
+    ),
+    diff: codeProfile('', '', [
+        ['comment', '^@@[^\n]*'],
+        ['code-add', '^\\+[^\n]*'],
+        ['code-remove', '^-{1}[^\n]*'],
+    ]),
+    markdown: codeProfile('', '', [
+        ['comment', '<!--[\\s\\S]*?-->'],
+        ['string', '`[^`]*`'],
+        ['number', '^#{1,6}[^\n]*'],
+    ]),
+};
+
+function normalizeCodeLanguage(value) {
+    const requested = String(value || '').trim().toLowerCase();
+    const safeName = requested.replace(/[^a-z0-9+#._-]/g, '');
+    return codeLanguageAliases[safeName] || safeName || 'text';
+}
+
+function highlightPlainCode(source, profile) {
+    const tokenPattern = /[A-Za-z_$][\w$]*|\b\d+(?:\.\d+)?\b/g;
+    const html = [];
+    let cursor = 0;
+    let match;
+    while ((match = tokenPattern.exec(source))) {
+        html.push(escapeHtml(source.slice(cursor, match.index)));
+        const value = match[0];
+        const lower = value.toLowerCase();
+        let tokenClass = '';
+        if (profile.keywords.has(lower)) tokenClass = 'keyword';
+        else if (profile.types.has(lower)) tokenClass = 'type';
+        else if (profile.literals.has(lower)) tokenClass = 'literal';
+        else if (/^\s*\(/.test(source.slice(match.index + value.length))) tokenClass = 'function';
+        html.push(tokenClass ? `<span class="code-token-${tokenClass}">${escapeHtml(value)}</span>` : escapeHtml(value));
+        cursor = match.index + value.length;
+    }
+    html.push(escapeHtml(source.slice(cursor)));
+    return html.join('');
+}
+
+function highlightCode(source, language) {
+    const profile = codeProfiles[language];
+    if (!profile) return escapeHtml(source);
+    const rules = profile.rules || [];
+    if (!rules.length) return highlightPlainCode(source, profile);
+    const pattern = new RegExp(rules.map((rule) => `(${rule[1]})`).join('|'), 'gm');
+    const html = [];
+    let cursor = 0;
+    let match;
+    while ((match = pattern.exec(source))) {
+        html.push(highlightPlainCode(source.slice(cursor, match.index), profile));
+        const ruleIndex = match.slice(1).findIndex((part) => part !== undefined);
+        const tokenClass = rules[ruleIndex]?.[0] || 'plain';
+        const className = tokenClass.startsWith('code-') ? tokenClass : `code-token-${tokenClass}`;
+        html.push(`<span class="${className}">${escapeHtml(match[0])}</span>`);
+        cursor = match.index + match[0].length;
+    }
+    html.push(highlightPlainCode(source.slice(cursor), profile));
+    return html.join('');
 }
 
 function safeUrl(url) {
@@ -110,140 +300,147 @@ function decodeLocalPath(path) {
     }
 }
 
-function renderInline(value) {
-    const tokens = [];
-    const token = (html) => {
-        const key = `\u0000${tokens.length}\u0000`;
-        tokens.push(html);
-        return key;
-    };
-    let text = escapeHtml(value);
-    const imageToken = (alt, url, title) => {
-        const cleanUrl = safeImageUrl(url.trim());
-        if (!cleanUrl) return escapeHtml(alt);
-        const attributes = `class="md-image" data-src="${escapeHtml(cleanUrl)}" alt="${escapeHtml(alt)}"${title ? ` title="${escapeHtml(title)}"` : ''}`;
-        return token(`<img ${attributes} src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" />`);
-    };
-    text = text.replace(/!\[([^\]]*)\]\(<([^>]+)>(?:\s+["']([^"']*)["'])?\)/g, (_, alt, url, title) => imageToken(alt, url, title));
-    text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+["']([^"']*)["'])?\)/g, (_, alt, url, title) => imageToken(alt, url, title));
-    text = text.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+["']([^"']*)["'])?\)/g, (_, label, url, title) => {
-        const cleanUrl = safeUrl(url);
-        if (!cleanUrl) return label;
-        return token(`<a class="md-link" data-href="${escapeHtml(cleanUrl)}"${title ? ` title="${escapeHtml(title)}"` : ''}>${label}</a>`);
+async function copyCode(button) {
+    const code = button.closest('.code-block')?.querySelector('code');
+    if (!code) return;
+    const value = code.textContent || '';
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(value);
+        } else {
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.append(textarea);
+            textarea.select();
+            try {
+                if (!document.execCommand('copy')) throw new Error('copy failed');
+            } finally {
+                textarea.remove();
+            }
+        }
+        button.textContent = '已复制';
+        clearTimeout(button.copyTimeout);
+        button.copyTimeout = setTimeout(() => { button.textContent = '复制'; }, 1600);
+    } catch (_) {
+        showToast('复制代码失败');
+    }
+}
+
+function createHeadingId(value, usedIds) {
+    const base = String(value || '').trim().toLowerCase().replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '') || 'heading';
+    let id = base;
+    let suffix = 2;
+    while (usedIds.has(id)) id = `${base}-${suffix++}`;
+    usedIds.add(id);
+    return id;
+}
+
+function headingText(token) {
+    return (token.children || []).filter((child) => child.type !== 'image').map((child) => child.content).join('').trim() || token.content.trim();
+}
+
+const markdown = new MarkdownIt({
+    html: false,
+    breaks: true,
+    linkify: false,
+    typographer: false,
+});
+
+function taskLists(md) {
+    md.core.ruler.after('inline', 'task-lists', (state) => {
+        state.tokens.forEach((token, index) => {
+            if (token.type !== 'list_item_open') return;
+            let inline;
+            for (let cursor = index + 1; cursor < state.tokens.length; cursor += 1) {
+                const candidate = state.tokens[cursor];
+                if (candidate.type === 'list_item_close' && candidate.level === token.level) break;
+                if (candidate.type === 'inline' && candidate.level > token.level) {
+                    inline = candidate;
+                    break;
+                }
+            }
+            const task = inline?.content.match(/^\[([ xX])\]\s+/);
+            if (!task) return;
+
+            token.attrJoin('class', 'task-list-item');
+            for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+                const list = state.tokens[cursor];
+                if ((list.type === 'bullet_list_open' || list.type === 'ordered_list_open') && list.level < token.level) {
+                    const classes = list.attrGet('class') || '';
+                    if (!classes.split(/\s+/).includes('contains-task-list')) list.attrSet('class', `${classes} contains-task-list`.trim());
+                    break;
+                }
+            }
+            inline.content = inline.content.slice(task[0].length);
+            const firstText = inline.children?.find((child) => child.type === 'text');
+            if (firstText?.content.startsWith(task[0])) firstText.content = firstText.content.slice(task[0].length);
+            inline.children = inline.children || [];
+            inline.children.unshift({
+                type: 'task_checkbox',
+                tag: 'input',
+                nesting: 0,
+                attrs: [['class', 'task-list-item-checkbox'], ['type', 'checkbox'], ['disabled', 'disabled']],
+                content: '',
+                level: inline.level,
+            });
+            if (task[1].toLowerCase() === 'x') inline.children[0].attrs.push(['checked', 'checked']);
+        });
     });
-    text = text.replace(/`([^`]+)`/g, (_, code) => token(`<code>${code}</code>`));
-    text = text.replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, strongA, strongB) => `<strong>${strongA || strongB}</strong>`);
-    text = text.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-    text = text.replace(/\*([^*]+)\*|_([^_]+)_/g, (_, emphasisA, emphasisB) => `<em>${emphasisA || emphasisB}</em>`);
-    text = text.replace(/  $/g, '<br>');
-    return text.replace(/\u0000(\d+)\u0000/g, (_, index) => tokens[Number(index)]);
+    md.renderer.rules.task_checkbox = (tokens, index) => {
+        const checked = tokens[index].attrs?.some(([name]) => name === 'checked') ? ' checked' : '';
+        return `<input class="task-list-item-checkbox" type="checkbox" disabled${checked}>`;
+    };
 }
-
-function isTableDivider(line) {
-    return /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
-}
-
-function splitTableRow(line) {
-    let value = line.trim();
-    if (value.startsWith('|')) value = value.slice(1);
-    if (value.endsWith('|')) value = value.slice(0, -1);
-    return value.split('|').map((cell) => cell.trim());
-}
+markdown.use(taskLists);
+markdown.renderer.rules.heading_open = (tokens, index, _options, env) => {
+    const token = tokens[index];
+    const heading = tokens[index + 1];
+    const usedIds = env.headingIds || (env.headingIds = new Set());
+    const id = createHeadingId(headingText(heading), usedIds);
+    env.outline.push({level: Number(token.tag.slice(1)), id, text: headingText(heading)});
+    return `<${token.tag} id="${escapeHtml(id)}">`;
+};
+markdown.renderer.rules.fence = (tokens, index) => {
+    const token = tokens[index];
+    const language = normalizeCodeLanguage(token.info.trim().split(/\s+/)[0]);
+    const label = codeLanguageLabels[language] || language;
+    const code = token.content.replace(/\n$/, '');
+    return `<div class="code-block"><div class="code-toolbar"><span class="code-language">${escapeHtml(label)}</span><button class="code-copy" type="button">复制</button></div><pre><code class="language-${escapeHtml(language)}">${highlightCode(code, language)}</code></pre></div>\n`;
+};
+markdown.renderer.rules.table_open = () => '<div class="table-wrap"><table>\n';
+markdown.renderer.rules.table_close = () => '</table></div>\n';
+markdown.renderer.rules.image = (tokens, index) => {
+    const token = tokens[index];
+    const cleanUrl = safeImageUrl(token.attrGet('src'));
+    if (!cleanUrl) return escapeHtml(token.content);
+    const title = token.attrGet('title');
+    return `<img class="md-image" data-src="${escapeHtml(cleanUrl)}" alt="${escapeHtml(token.content)}"${title ? ` title="${escapeHtml(title)}"` : ''} src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" />`;
+};
+markdown.renderer.rules.link_open = (tokens, index) => {
+    const token = tokens[index];
+    const cleanUrl = safeUrl(token.attrGet('href'));
+    token.meta = {safe: Boolean(cleanUrl)};
+    if (!cleanUrl) return '<span class="md-unsafe-link">';
+    const title = token.attrGet('title');
+    return `<a class="md-link" data-href="${escapeHtml(cleanUrl)}"${title ? ` title="${escapeHtml(title)}"` : ''}>`;
+};
+markdown.renderer.rules.link_close = (tokens, index) => {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+        if (tokens[cursor].type === 'link_open' && tokens[cursor].level === tokens[index].level) {
+            return tokens[cursor].meta?.safe ? '</a>' : '</span>';
+        }
+    }
+    return '</span>';
+};
 
 function renderMarkdown(source) {
-    const lines = String(source || '').replace(/\r\n?/g, '\n').split('\n');
-    const html = [];
-    let index = 0;
-    let paragraph = [];
-    let listType = '';
-    let inQuote = false;
-
-    const closeList = () => {
-        if (listType) {
-            html.push(`</${listType}>`);
-            listType = '';
-        }
-    };
-    const closeQuote = () => {
-        if (inQuote) {
-            html.push('</blockquote>');
-            inQuote = false;
-        }
-    };
-    const flushParagraph = () => {
-        if (paragraph.length) {
-            html.push(`<p>${paragraph.map(renderInline).join('<br>')}</p>`);
-            paragraph = [];
-        }
-    };
-
-    while (index < lines.length) {
-        const line = lines[index];
-        const fence = line.match(/^\s*(```+|~~~+)\s*([^\s]*)\s*$/);
-        if (fence) {
-            flushParagraph(); closeList(); closeQuote();
-            const marker = fence[1][0];
-            const code = [];
-            index += 1;
-            while (index < lines.length && !new RegExp(`^\\s*${marker}{3,}\\s*$`).test(lines[index])) {
-                code.push(lines[index]); index += 1;
-            }
-            if (index < lines.length) index += 1;
-            html.push(`<pre><code class="language-${escapeHtml(fence[2] || 'text')}">${escapeHtml(code.join('\n'))}</code></pre>`);
-            continue;
-        }
-        const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
-        if (heading) {
-            flushParagraph(); closeList(); closeQuote();
-            const level = heading[1].length;
-            html.push(`<h${level} id="heading-${html.length}">${renderInline(heading[2])}</h${level}>`);
-            index += 1; continue;
-        }
-        if (index + 1 < lines.length && line.includes('|') && isTableDivider(lines[index + 1])) {
-            flushParagraph(); closeList(); closeQuote();
-            const header = splitTableRow(line);
-            index += 2;
-            const rows = [];
-            while (index < lines.length && lines[index].includes('|') && lines[index].trim() !== '') {
-                rows.push(splitTableRow(lines[index])); index += 1;
-            }
-            html.push('<div class="table-wrap"><table><thead><tr>' + header.map((cell) => `<th>${renderInline(cell)}</th>`).join('') + '</tr></thead><tbody>');
-            rows.forEach((row) => {
-                html.push('<tr>' + header.map((_, cellIndex) => `<td>${renderInline(row[cellIndex] || '')}</td>`).join('') + '</tr>');
-            });
-            html.push('</tbody></table></div>');
-            continue;
-        }
-        const quote = line.match(/^\s{0,3}> ?(.*)$/);
-        if (quote) {
-            flushParagraph(); closeList();
-            if (!inQuote) { html.push('<blockquote>'); inQuote = true; }
-            html.push(`<p>${renderInline(quote[1])}</p>`);
-            index += 1; continue;
-        }
-        if (line.trim() === '') {
-            flushParagraph(); closeList(); closeQuote(); index += 1; continue;
-        }
-        const list = line.match(/^\s{0,3}([-+*]|\d+[.)])\s+(.*)$/);
-        if (list) {
-            flushParagraph(); closeQuote();
-            const type = /^\d/.test(list[1]) ? 'ol' : 'ul';
-            if (listType && listType !== type) closeList();
-            if (!listType) { listType = type; html.push(`<${type}>`); }
-            let item = list[2];
-            const task = item.match(/^\[([ xX])\]\s+(.*)$/);
-            if (task) item = `<label class="task"><input type="checkbox" disabled ${task[1].toLowerCase() === 'x' ? 'checked' : ''}><span>${renderInline(task[2])}</span></label>`;
-            else item = renderInline(item);
-            html.push(`<li>${item}</li>`);
-            index += 1; continue;
-        }
-        if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
-            flushParagraph(); closeList(); closeQuote(); html.push('<hr>'); index += 1; continue;
-        }
-        closeList(); closeQuote(); paragraph.push(line); index += 1;
-    }
-    flushParagraph(); closeList(); closeQuote();
-    return html.join('\n');
+    const env = {headingIds: new Set(), outline: []};
+    const rendered = markdown.render(String(source || ''), env);
+    state.outline = env.outline;
+    return rendered;
 }
 
 function setStatus(text, tone = 'ready') {
@@ -280,6 +477,67 @@ async function hydrateImages() {
     }));
 }
 
+function renderOutline() {
+    outlineNav.replaceChildren();
+    outline.hidden = state.outline.length === 0;
+    outlineButton.hidden = state.outline.length === 0;
+    outline.classList.toggle('is-collapsed', !state.outlineVisible);
+    updateOutlineButton();
+    state.outline.forEach((entry) => {
+        const link = document.createElement('a');
+        link.className = 'outline-item';
+        link.dataset.headingId = entry.id;
+        link.dataset.level = String(entry.level);
+        link.href = `#${entry.id}`;
+        link.textContent = entry.text;
+        link.title = entry.text;
+        outlineNav.append(link);
+    });
+}
+
+function setOutlineOpen(open) {
+    const visible = Boolean(open && state.outline.length);
+    outline.classList.toggle('is-open', visible);
+    updateOutlineButton();
+}
+
+function setOutlineVisibility(visible) {
+    state.outlineVisible = Boolean(visible && state.outline.length);
+    outline.classList.toggle('is-collapsed', !state.outlineVisible);
+    if (!state.outlineVisible) outline.classList.remove('is-open');
+    updateOutlineButton();
+}
+
+function updateOutlineButton() {
+    const mobile = window.matchMedia('(max-width: 800px)').matches;
+    const active = mobile ? outline.classList.contains('is-open') : state.outlineVisible;
+    outlineButton.setAttribute('aria-expanded', String(mobile && active));
+    outlineButton.setAttribute('aria-pressed', String(active));
+    outlineButton.title = active ? '隐藏文档导航' : '显示文档导航';
+    outlineButton.setAttribute('aria-label', outlineButton.title);
+}
+
+function updateOutlineActive() {
+    if (!state.outline.length) return;
+    const threshold = readerPanel.getBoundingClientRect().top + 80;
+    let active = state.outline[0].id;
+    for (const entry of state.outline) {
+        const heading = document.getElementById(entry.id);
+        if (heading && heading.getBoundingClientRect().top <= threshold) active = entry.id;
+    }
+    outlineNav.querySelectorAll('.outline-item').forEach((link) => link.classList.toggle('is-active', link.dataset.headingId === active));
+}
+
+function scrollToHeading(id) {
+    const heading = document.getElementById(id);
+    if (!heading) return;
+    const panelTop = readerPanel.getBoundingClientRect().top;
+    const headingTop = heading.getBoundingClientRect().top;
+    readerPanel.scrollBy({top: headingTop - panelTop - 24, behavior: 'smooth'});
+    setOutlineOpen(false);
+    setTimeout(updateOutlineActive, 120);
+}
+
 function renderTabs() {
     tabbar.replaceChildren();
     tabbar.hidden = state.tabs.length < 2;
@@ -310,6 +568,7 @@ async function clearDocument() {
     await StopWatching();
     state.path = '';
     state.document = null;
+    state.outline = [];
     body.replaceChildren();
     body.hidden = true;
     dropHint.hidden = false;
@@ -323,6 +582,8 @@ async function clearDocument() {
     topbar.classList.remove('is-hidden');
     backToTop.classList.remove('is-visible');
     exportButton.disabled = true;
+    renderOutline();
+    setOutlineOpen(false);
     renderTabs();
 }
 
@@ -358,6 +619,8 @@ async function loadPath(path, announce = true) {
         }
         renderTabs();
         body.innerHTML = renderMarkdown(documentData.content);
+        renderOutline();
+        setOutlineOpen(false);
         body.hidden = false;
         dropHint.hidden = true;
         fileTitle.textContent = documentData.name;
@@ -367,6 +630,7 @@ async function loadPath(path, announce = true) {
         WindowSetTitle(`${documentData.name} - Markdown Viewer`);
         readerPanel.scrollTop = 0;
         lastScrollTop = 0;
+        updateOutlineActive();
         topbar.classList.remove('is-hidden');
         exportButton.disabled = false;
         backToTop.classList.remove('is-visible');
@@ -421,12 +685,25 @@ readerPanel.addEventListener('scroll', () => {
         topbar.classList.add('is-hidden');
     }
     backToTop.classList.toggle('is-visible', currentScrollTop > readerPanel.clientHeight);
+    updateOutlineActive();
     lastScrollTop = currentScrollTop;
 });
 
 backToTop.addEventListener('click', () => {
     readerPanel.scrollTo({top: 0, behavior: 'smooth'});
     topbar.classList.remove('is-hidden');
+});
+
+outlineButton.addEventListener('click', () => {
+    if (window.matchMedia('(max-width: 800px)').matches) setOutlineOpen(!outline.classList.contains('is-open'));
+    else setOutlineVisibility(!state.outlineVisible);
+});
+outlineClose.addEventListener('click', () => setOutlineOpen(false));
+outlineNav.addEventListener('click', (event) => {
+    const link = event.target.closest('.outline-item');
+    if (!link) return;
+    event.preventDefault();
+    scrollToHeading(link.dataset.headingId);
 });
 
 tabbar.addEventListener('click', async (event) => {
@@ -460,6 +737,12 @@ document.querySelector('#increase-button').addEventListener('click', () => {
 });
 
 body.addEventListener('click', async (event) => {
+    const copyButton = event.target.closest('.code-copy');
+    if (copyButton) {
+        event.preventDefault();
+        await copyCode(copyButton);
+        return;
+    }
     const link = event.target.closest('.md-link');
     if (!link) return;
     event.preventDefault();
