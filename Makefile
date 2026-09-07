@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 
 APP      := markdown-viewer
-VERSION  ?= 0.1.0
+VERSION  ?= 0.0.3
 WAILS    ?= wails
 DIST     := dist
 BIN      := build/bin

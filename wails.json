@@ -14,7 +14,7 @@
   "info": {
     "companyName": "Markdown Viewer",
     "productName": "Markdown Viewer",
-    "productVersion": "0.1.0",
+    "productVersion": "0.0.3",
     "comments": "A focused Markdown file reader",
     "fileAssociations": [
       {

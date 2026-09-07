@@ -13,6 +13,7 @@ const themes = {
     'Peninsula-dark': {label: 'Peninsula-dark'},
     'Plano2': {label: 'Plano2'},
 };
+const appVersion = '0.0.3';
 
 const app = document.querySelector('#app');
 const state = {
@@ -38,6 +39,7 @@ app.innerHTML = `
                 <button class="tool-button primary" id="open-button" title="打开文件 (Ctrl+O)"><span class="button-icon">+</span>打开</button>
                 <button class="tool-button" id="export-button" title="导出当前文档为 PDF" disabled><span class="button-icon">↓</span>PDF</button>
                 <button class="icon-button outline-toggle" id="outline-button" type="button" title="显示文档导航" aria-label="显示文档导航" aria-expanded="false" aria-pressed="false" hidden>☰</button>
+                <button class="icon-button about-button" id="about-button" type="button" title="关于 Markdown Viewer" aria-label="关于 Markdown Viewer">!</button>
                 <label class="theme-picker" title="选择主题">
                     <span class="theme-swatch" aria-hidden="true"></span>
                     <select id="theme-select" aria-label="选择主题">
@@ -78,6 +80,18 @@ app.innerHTML = `
         </footer>
         <button class="back-to-top" id="back-to-top" type="button" title="返回顶部" aria-label="返回顶部">↑</button>
         <div class="toast" id="toast" role="status" aria-live="polite"></div>
+        <div class="about-overlay" id="about-dialog" hidden>
+            <section class="about-card" role="dialog" aria-modal="true" aria-labelledby="about-title" aria-describedby="about-description" tabindex="-1">
+                <button class="about-close" id="about-close" type="button" title="关闭关于窗口" aria-label="关闭关于窗口">×</button>
+                <div class="about-icon" aria-hidden="true">!</div>
+                <div class="about-kicker">ABOUT</div>
+                <h2 id="about-title">Markdown Viewer</h2>
+                <a class="about-version" id="about-version" href="https://github.com/zc310/markdown-viewer">版本 ${appVersion}</a>
+                <p id="about-description">一个专注于本地 Markdown 阅读的桌面应用，让文档回归清晰、安静和易读。</p>
+                <div class="about-tech">Wails · markdown-it · 本地优先</div>
+                <button class="tool-button primary about-confirm" id="about-confirm" type="button">知道了</button>
+            </section>
+        </div>
     </div>
 `;
 
@@ -99,7 +113,13 @@ const outline = document.querySelector('#document-outline');
 const outlineNav = document.querySelector('#outline-nav');
 const outlineButton = document.querySelector('#outline-button');
 const outlineClose = document.querySelector('#outline-close');
+const aboutButton = document.querySelector('#about-button');
+const aboutDialog = document.querySelector('#about-dialog');
+const aboutClose = document.querySelector('#about-close');
+const aboutConfirm = document.querySelector('#about-confirm');
+const aboutVersion = document.querySelector('#about-version');
 let lastScrollTop = 0;
+let aboutReturnFocus = null;
 
 function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (character) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[character]));
@@ -455,6 +475,19 @@ function showToast(message) {
     showToast.timeout = setTimeout(() => toast.classList.remove('visible'), 2600);
 }
 
+function setAboutOpen(open) {
+    const visible = Boolean(open);
+    if (visible) aboutReturnFocus = document.activeElement;
+    aboutDialog.hidden = !visible;
+    document.body.classList.toggle('about-open', visible);
+    if (visible) {
+        aboutClose.focus();
+    } else if (aboutReturnFocus instanceof HTMLElement) {
+        aboutReturnFocus.focus();
+        aboutReturnFocus = null;
+    }
+}
+
 async function hydrateImages() {
     const images = [...body.querySelectorAll('.md-image')];
     await Promise.all(images.map(async (image) => {
@@ -735,6 +768,16 @@ document.querySelector('#increase-button').addEventListener('click', () => {
     state.fontScale = Math.min(1.3, state.fontScale + 0.05);
     body.style.setProperty('--reader-scale', state.fontScale);
 });
+aboutButton.addEventListener('click', () => setAboutOpen(true));
+aboutClose.addEventListener('click', () => setAboutOpen(false));
+aboutConfirm.addEventListener('click', () => setAboutOpen(false));
+aboutDialog.addEventListener('click', (event) => {
+    if (event.target === aboutDialog) setAboutOpen(false);
+});
+aboutVersion.addEventListener('click', async (event) => {
+    event.preventDefault();
+    try { await OpenExternal(aboutVersion.href); } catch (_) { BrowserOpenURL(aboutVersion.href); }
+});
 
 body.addEventListener('click', async (event) => {
     const copyButton = event.target.closest('.code-copy');
@@ -757,6 +800,11 @@ body.addEventListener('click', async (event) => {
 });
 
 document.addEventListener('keydown', async (event) => {
+    if (event.key === 'Escape' && !aboutDialog.hidden) {
+        event.preventDefault();
+        setAboutOpen(false);
+        return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); await chooseFile(); }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r' && state.path) { event.preventDefault(); await openPath(state.path, false); }
     if ((event.ctrlKey || event.metaKey) && (event.key === '+' || event.key === '=')) { event.preventDefault(); document.querySelector('#increase-button').click(); }
