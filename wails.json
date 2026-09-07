@@ -1,0 +1,36 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "markdown-viewer",
+  "outputfilename": "markdown-viewer",
+  "build:tags": "webkit2_41",
+  "frontend:install": "go run build.go",
+  "frontend:build": "go run build.go",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "zc310.tech",
+    "email": ""
+  },
+  "info": {
+    "companyName": "Markdown Viewer",
+    "productName": "Markdown Viewer",
+    "productVersion": "0.1.0",
+    "comments": "A focused Markdown file reader",
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown",
+        "description": "Markdown document",
+        "iconName": "appicon",
+        "role": "Editor"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown",
+        "description": "Markdown document",
+        "iconName": "appicon",
+        "role": "Editor"
+      }
+    ]
+  }
+}
