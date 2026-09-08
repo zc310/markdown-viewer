@@ -82,6 +82,7 @@
 .drop-hint h1 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: clamp(27px, 4vw, 42px); letter-spacing: -.02em; }
 .drop-hint p { margin: 13px 0 25px; color: var(--muted); font-size: 14px; }
 .empty-button { height: 40px; padding: 0 19px; }
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; }
 .markdown-body { --reader-scale: 1; max-width: 820px; margin: 0 auto; font-family: Georgia, "Times New Roman", serif; font-size: calc(17px * var(--reader-scale)); line-height: 1.76; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, sans-serif; line-height: 1.22; letter-spacing: -.02em; }
 .markdown-body h1 { margin: 0 0 28px; font-size: calc(2.35em * var(--reader-scale)); }

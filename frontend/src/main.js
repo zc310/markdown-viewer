@@ -1,5 +1,5 @@
 import {ExportPDF, InitialPath, OpenFile, OpenExternal, PendingPaths, ReadAsset, ReadDocument, ResolveDocumentLink, StartWatching, StopWatching} from '../wailsjs/go/main/App';
-import {EventsOn, OnFileDrop, BrowserOpenURL, WindowSetTitle} from '../wailsjs/runtime/runtime.js';
+import {EventsOn, OnFileDrop, BrowserOpenURL, ClipboardGetText, WindowSetTitle} from '../wailsjs/runtime/runtime.js';
 import MarkdownIt from 'markdown-it';
 import './style.css';
 import './app.css';
@@ -37,6 +37,7 @@ app.innerHTML = `
             </div>
             <div class="toolbar">
                 <button class="tool-button primary" id="open-button" title="打开文件 (Ctrl+O)"><span class="button-icon">+</span>打开</button>
+                <button class="tool-button" id="paste-button" title="粘贴剪贴板中的 Markdown 文本"><span class="button-icon">↳</span>粘贴</button>
                 <button class="tool-button" id="export-button" title="导出当前文档为 PDF" disabled><span class="button-icon">↓</span>PDF</button>
                 <button class="icon-button outline-toggle" id="outline-button" type="button" title="显示文档导航" aria-label="显示文档导航" aria-expanded="false" aria-pressed="false" hidden>☰</button>
                 <button class="icon-button about-button" id="about-button" type="button" title="关于 Markdown Viewer" aria-label="关于 Markdown Viewer">!</button>
@@ -67,7 +68,10 @@ app.innerHTML = `
                     <div class="empty-symbol">#</div>
                     <h1>打开一篇 Markdown 文档</h1>
                     <p>将 .md 文件拖到这里，或使用打开按钮开始阅读。</p>
-                    <button class="tool-button primary empty-button" id="empty-open-button">选择文件</button>
+                    <div class="empty-actions">
+                        <button class="tool-button primary empty-button" id="empty-open-button">选择文件</button>
+                        <button class="tool-button empty-button" id="empty-paste-button">粘贴 Markdown</button>
+                    </div>
                 </div>
                 <article class="markdown-body" id="markdown-body" hidden></article>
             </section>
@@ -109,6 +113,8 @@ const tabbar = document.querySelector('#tabbar');
 const themeSelect = document.querySelector('#theme-select');
 const backToTop = document.querySelector('#back-to-top');
 const exportButton = document.querySelector('#export-button');
+const pasteButton = document.querySelector('#paste-button');
+const emptyPasteButton = document.querySelector('#empty-paste-button');
 const outline = document.querySelector('#document-outline');
 const outlineNav = document.querySelector('#outline-nav');
 const outlineButton = document.querySelector('#outline-button');
@@ -620,6 +626,54 @@ async function clearDocument() {
     renderTabs();
 }
 
+async function pasteMarkdown() {
+    let content;
+    try {
+        try {
+            content = await ClipboardGetText();
+        } catch (nativeError) {
+            if (!navigator.clipboard?.readText) throw nativeError;
+            content = await navigator.clipboard.readText();
+        }
+    } catch (error) {
+        showToast(error?.message || '无法读取剪贴板，请检查剪贴板权限');
+        return;
+    }
+    if (!String(content || '').trim()) {
+        showToast('剪贴板中没有可预览的 Markdown 文本');
+        return;
+    }
+
+    await StopWatching();
+    state.path = '';
+    state.document = {
+        path: '',
+        name: '剪贴板 Markdown',
+        content: String(content),
+        size: new Blob([String(content)]).size,
+        modifiedAt: '',
+    };
+    body.innerHTML = renderMarkdown(state.document.content);
+    renderOutline();
+    setOutlineOpen(false);
+    body.hidden = false;
+    dropHint.hidden = true;
+    fileTitle.textContent = state.document.name;
+    fileTitle.title = '来自系统剪贴板的临时预览';
+    statusMeta.textContent = `${formatBytes(state.document.size)}  ·  临时预览`;
+    setStatus('已粘贴预览', 'ready');
+    WindowSetTitle(`${state.document.name} - Markdown Viewer`);
+    readerPanel.scrollTop = 0;
+    lastScrollTop = 0;
+    topbar.classList.remove('is-hidden');
+    exportButton.disabled = true;
+    backToTop.classList.remove('is-visible');
+    renderTabs();
+    updateOutlineActive();
+    hydrateImages();
+    showToast('已粘贴 Markdown 文本');
+}
+
 async function closeTab(path) {
     const index = state.tabs.findIndex((tab) => tab.path === path);
     if (index < 0) return;
@@ -639,6 +693,8 @@ async function closeTab(path) {
 
 async function loadPath(path, announce = true) {
     if (!path) return;
+    const isReload = state.path === path && Boolean(state.document);
+    const previousScrollTop = isReload ? readerPanel.scrollTop : 0;
     setStatus('正在读取…', 'busy');
     try {
         const documentData = await ReadDocument(path);
@@ -661,14 +717,18 @@ async function loadPath(path, announce = true) {
         statusMeta.textContent = `${formatBytes(documentData.size)}  ·  ${formatDate(documentData.modifiedAt)}`;
         setStatus('已打开', 'ready');
         WindowSetTitle(`${documentData.name} - Markdown Viewer`);
-        readerPanel.scrollTop = 0;
-        lastScrollTop = 0;
-        updateOutlineActive();
         topbar.classList.remove('is-hidden');
         exportButton.disabled = false;
-        backToTop.classList.remove('is-visible');
         await StartWatching(documentData.path);
-        hydrateImages();
+        await hydrateImages();
+        const restoreScroll = () => {
+            readerPanel.scrollTop = previousScrollTop;
+            lastScrollTop = previousScrollTop;
+            updateOutlineActive();
+            backToTop.classList.toggle('is-visible', previousScrollTop > readerPanel.clientHeight);
+        };
+        restoreScroll();
+        requestAnimationFrame(restoreScroll);
         if (announce) showToast(`已打开 ${documentData.name}`);
     } catch (error) {
         setStatus('打开失败', 'error');
@@ -751,6 +811,8 @@ tabbar.addEventListener('click', async (event) => {
 
 document.querySelector('#open-button').addEventListener('click', chooseFile);
 document.querySelector('#empty-open-button').addEventListener('click', chooseFile);
+pasteButton.addEventListener('click', pasteMarkdown);
+emptyPasteButton.addEventListener('click', pasteMarkdown);
 themeSelect.addEventListener('change', (event) => setTheme(event.target.value));
 exportButton.addEventListener('click', async () => {
     if (!state.path) return;
@@ -806,6 +868,7 @@ document.addEventListener('keydown', async (event) => {
         return;
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); await chooseFile(); }
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v') { event.preventDefault(); await pasteMarkdown(); }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r' && state.path) { event.preventDefault(); await openPath(state.path, false); }
     if ((event.ctrlKey || event.metaKey) && (event.key === '+' || event.key === '=')) { event.preventDefault(); document.querySelector('#increase-button').click(); }
     if ((event.ctrlKey || event.metaKey) && event.key === '-') { event.preventDefault(); document.querySelector('#decrease-button').click(); }
