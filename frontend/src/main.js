@@ -126,6 +126,7 @@ const aboutConfirm = document.querySelector('#about-confirm');
 const aboutVersion = document.querySelector('#about-version');
 let lastScrollTop = 0;
 let aboutReturnFocus = null;
+let clipboardPreviewCount = 0;
 
 function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (character) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[character]));
@@ -589,7 +590,7 @@ function renderTabs() {
         select.className = 'tab-select';
         select.type = 'button';
         select.textContent = tab.document.name;
-        select.title = tab.path;
+        select.title = tab.temporary ? '剪贴板中的临时 Markdown 预览' : tab.path;
 
         const close = document.createElement('button');
         close.className = 'tab-close';
@@ -626,6 +627,30 @@ async function clearDocument() {
     renderTabs();
 }
 
+async function renderTemporaryDocument(tab) {
+    await StopWatching();
+    state.path = tab.path;
+    state.document = tab.document;
+    body.innerHTML = renderMarkdown(tab.document.content);
+    renderOutline();
+    setOutlineOpen(false);
+    body.hidden = false;
+    dropHint.hidden = true;
+    fileTitle.textContent = tab.document.name;
+    fileTitle.title = '来自系统剪贴板的临时预览';
+    statusMeta.textContent = `${formatBytes(tab.document.size)}  ·  临时预览`;
+    setStatus('已粘贴预览', 'ready');
+    WindowSetTitle(`${tab.document.name} - Markdown Viewer`);
+    readerPanel.scrollTop = 0;
+    lastScrollTop = 0;
+    topbar.classList.remove('is-hidden');
+    exportButton.disabled = true;
+    backToTop.classList.remove('is-visible');
+    renderTabs();
+    updateOutlineActive();
+    hydrateImages();
+}
+
 async function pasteMarkdown() {
     let content;
     try {
@@ -644,33 +669,20 @@ async function pasteMarkdown() {
         return;
     }
 
-    await StopWatching();
-    state.path = '';
-    state.document = {
-        path: '',
-        name: '剪贴板 Markdown',
-        content: String(content),
-        size: new Blob([String(content)]).size,
-        modifiedAt: '',
+    const contentText = String(content);
+    const tab = {
+        path: `clipboard://${Date.now()}-${clipboardPreviewCount}`,
+        temporary: true,
+        document: {
+            path: '',
+            name: `剪贴板 Markdown ${++clipboardPreviewCount}`,
+            content: contentText,
+            size: new Blob([contentText]).size,
+            modifiedAt: '',
+        },
     };
-    body.innerHTML = renderMarkdown(state.document.content);
-    renderOutline();
-    setOutlineOpen(false);
-    body.hidden = false;
-    dropHint.hidden = true;
-    fileTitle.textContent = state.document.name;
-    fileTitle.title = '来自系统剪贴板的临时预览';
-    statusMeta.textContent = `${formatBytes(state.document.size)}  ·  临时预览`;
-    setStatus('已粘贴预览', 'ready');
-    WindowSetTitle(`${state.document.name} - Markdown Viewer`);
-    readerPanel.scrollTop = 0;
-    lastScrollTop = 0;
-    topbar.classList.remove('is-hidden');
-    exportButton.disabled = true;
-    backToTop.classList.remove('is-visible');
-    renderTabs();
-    updateOutlineActive();
-    hydrateImages();
+    state.tabs.push(tab);
+    await renderTemporaryDocument(tab);
     showToast('已粘贴 Markdown 文本');
 }
 
@@ -685,10 +697,17 @@ async function closeTab(path) {
     }
     if (wasActive) {
         const nextTab = state.tabs[Math.min(index, state.tabs.length - 1)];
-        await openPath(nextTab.path, false);
+        await activateTab(nextTab.path);
     } else {
         renderTabs();
     }
+}
+
+async function activateTab(path) {
+    const tab = state.tabs.find((candidate) => candidate.path === path);
+    if (!tab) return;
+    if (tab.temporary) await renderTemporaryDocument(tab);
+    else await openPath(tab.path, false);
 }
 
 async function loadPath(path, announce = true) {
@@ -805,7 +824,7 @@ tabbar.addEventListener('click', async (event) => {
     if (event.target.closest('.tab-close')) {
         await closeTab(item.dataset.path);
     } else {
-        await openPath(item.dataset.path, false);
+        await activateTab(item.dataset.path);
     }
 });
 
