@@ -74,22 +74,52 @@ wails build --platform linux/amd64 --tags webkit2_41
 也可以使用 Makefile 编译并制作 ZIP 包：
 
 ```bash
-# 编译 Linux 和 Windows amd64 程序
+# 编译 Linux amd64、Windows amd64/ARM64 程序
 make build
 
-# 编译 Linux、Windows、Windows Installer，并生成 ZIP 包
+# 编译默认平台和架构、Windows Installer，并生成 ZIP 包
 make package
+
+# 使用 aarch64-w64-mingw32-clang 编译 Windows ARM64 程序
+make build-windows-arm64
+
+# 编译 Windows ARM64 程序并生成 ZIP 包
+make package-windows-arm64
+
+# 编译 Windows ARM64 NSIS 安装程序并生成 ZIP 包
+make package-windows-arm64-installer
+
+# 使用 aarch64-linux-gnu-gcc 编译 Linux ARM64 程序
+make build-linux-arm64
+
+# 编译 Linux ARM64 程序并生成 ZIP 包
+make package-linux-arm64
 ```
 
-生成文件：
+默认生成文件：
 
 ```text
 dist/markdown-viewer-linux-amd64.zip
 dist/markdown-viewer-windows-amd64.zip
+dist/markdown-viewer-windows-arm64.zip
 dist/markdown-viewer-windows-amd64-installer.zip
+dist/markdown-viewer-windows-arm64-installer.zip
 ```
 
-直接执行 `make` 与 `make package` 相同，会默认编译两个平台、制作 Windows NSIS 安装程序，并生成以上三个 ZIP 包。
+直接执行 `make` 与 `make package` 相同，会默认编译 Linux amd64、Windows amd64/ARM64 版本，制作两种架构的 Windows NSIS 安装程序，并生成默认 ZIP 包。Linux ARM64 使用独立目标，不会被默认构建触发。
+
+单独执行以下目标可以只构建 Windows ARM64 产物：
+
+```text
+dist/markdown-viewer-windows-arm64.zip
+dist/markdown-viewer-windows-arm64-installer.zip
+```
+
+单独执行以下目标可以只构建 Linux ARM64 产物：
+
+```text
+dist/markdown-viewer-linux-arm64.zip
+```
 
 如果 `wails` 不在 PATH 中，可以指定 CLI 路径：
 
@@ -97,7 +127,7 @@ dist/markdown-viewer-windows-amd64-installer.zip
 make WAILS=/path/to/wails package
 ```
 
-Linux 版本使用 `webkit2_41`，运行目标系统需要安装 WebKitGTK 4.1 和 libsoup 3；Windows 版本需要 WebView2 Runtime。Windows Installer 构建还需要安装 NSIS，并确保 `makensis` 位于 PATH 中。
+Linux 版本使用 `webkit2_41`，运行目标系统需要安装对应架构的 WebKitGTK 4.1 和 libsoup 3；Windows 版本需要 WebView2 Runtime。默认构建 ARM64 版本还需要对应的交叉编译器和 ARM64 目标库。Windows Installer 构建还需要安装 NSIS，并确保 `makensis` 位于 PATH 中。
 
 构建 Windows 安装程序：
 
@@ -114,8 +144,44 @@ make package-windows-installer
 
 安装程序输出为 `build/bin/markdown-viewer-amd64-installer.exe`，ZIP 包输出为 `dist/markdown-viewer-windows-amd64-installer.zip`。
 
+Windows ARM64 交叉编译默认使用 `aarch64-w64-mingw32-clang` 和 `aarch64-w64-mingw32-clang++`。也可以直接覆盖编译器：
+
+```bash
+CC=aarch64-w64-mingw32-clang \
+CXX=aarch64-w64-mingw32-clang++ \
+make package-windows-arm64
+```
+
+或使用 Makefile 专用变量：
+
+```bash
+make WINDOWS_ARM64_CC=/path/to/clang \
+     WINDOWS_ARM64_CXX=/path/to/clang++ \
+     package-windows-arm64
+```
+
+ARM64 安装程序输出为 `build/bin/markdown-viewer-arm64-installer.exe`，ZIP 包输出为 `dist/markdown-viewer-windows-arm64-installer.zip`。
+
+Linux ARM64 交叉编译默认使用 `aarch64-linux-gnu-gcc` 和 `aarch64-linux-gnu-g++`，并要求构建环境提供 ARM64 版本的 WebKitGTK 4.1、libsoup 3 及其开发文件。也可以覆盖编译器：
+
+```bash
+CC=aarch64-linux-gnu-gcc \
+CXX=aarch64-linux-gnu-g++ \
+make package-linux-arm64
+```
+
+或使用 Makefile 专用变量：
+
+```bash
+make LINUX_ARM64_CC=/path/to/aarch64-linux-gnu-gcc \
+     LINUX_ARM64_CXX=/path/to/aarch64-linux-gnu-g++ \
+     package-linux-arm64
+```
+
 Windows 安装程序已经配置 `.md` 和 `.markdown` 文件关联；macOS 的 App 包含对应的文档类型元数据。Linux 目前提供可执行文件和启动参数支持，桌面环境的 `.desktop` 注册需要随发行版安装方式补充。
 
 代码块使用 fenced code 的语言标记进行高亮，例如 ```` ```go ````；未标记语言或不支持的语言会以普通代码显示。打开文档后点击代码块右上角的 `复制` 按钮即可复制代码。
+
+点击工具栏的 `粘贴` 按钮，或使用 `Ctrl+Shift+V`，可以直接将系统剪贴板中的 Markdown 文本渲染为临时预览；该内容不会写入文件。
 
 打开文档后点击工具栏中的 `PDF` 按钮，会打开系统打印对话框。选择 `Print to PDF` 或 `另存为 PDF` 即可导出当前文档。
