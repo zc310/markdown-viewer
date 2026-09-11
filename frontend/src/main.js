@@ -14,6 +14,23 @@ const themes = {
     'Plano2': {label: 'Plano2'},
 };
 const appVersion = '0.0.3';
+const recentFilesStorageKey = 'markdown-viewer-recent-files';
+const maxRecentFiles = 12;
+
+function loadRecentFiles() {
+    try {
+        const files = JSON.parse(localStorage.getItem(recentFilesStorageKey) || '[]');
+        if (!Array.isArray(files)) return [];
+        const seen = new Set();
+        return files.filter((file) => {
+            if (!file || typeof file.path !== 'string' || !file.path || seen.has(file.path)) return false;
+            seen.add(file.path);
+            return true;
+        }).slice(0, maxRecentFiles);
+    } catch (_) {
+        return [];
+    }
+}
 
 const app = document.querySelector('#app');
 const state = {
@@ -24,6 +41,7 @@ const state = {
     outlineVisible: true,
     fontScale: 1,
     theme: localStorage.getItem('markdown-viewer-theme') || 'adw-everforest',
+    recentFiles: loadRecentFiles(),
 };
 if (!themes[state.theme]) state.theme = 'adw-everforest';
 
@@ -37,6 +55,7 @@ app.innerHTML = `
             </div>
             <div class="toolbar">
                 <button class="tool-button primary" id="open-button" title="打开文件 (Ctrl+O)"><span class="button-icon">+</span>打开</button>
+                <button class="tool-button recent-button" id="recent-button" title="查看最近打开的文件" aria-expanded="false" aria-controls="recent-menu"><span class="button-icon">◷</span>最近</button>
                 <button class="tool-button" id="paste-button" title="粘贴剪贴板中的 Markdown 文本"><span class="button-icon">↳</span>粘贴</button>
                 <button class="tool-button" id="export-button" title="导出当前文档为 PDF" disabled><span class="button-icon">↓</span>PDF</button>
                 <button class="icon-button outline-toggle" id="outline-button" type="button" title="显示文档导航" aria-label="显示文档导航" aria-expanded="false" aria-pressed="false" hidden>☰</button>
@@ -51,6 +70,17 @@ app.innerHTML = `
                 <button class="icon-button" id="increase-button" title="增大字号" aria-label="增大字号">A+</button>
             </div>
         </header>
+        <section class="recent-menu" id="recent-menu" aria-label="最近打开的文件" hidden>
+            <div class="recent-header">
+                <div>
+                    <div class="recent-kicker">HISTORY</div>
+                    <div class="recent-title">最近打开</div>
+                </div>
+                <button class="recent-clear" id="recent-clear" type="button">清空</button>
+            </div>
+            <div class="recent-list" id="recent-list"></div>
+            <div class="recent-empty" id="recent-empty">还没有最近打开的文件</div>
+        </section>
         <nav class="tabbar" id="tabbar" aria-label="已打开的文档" hidden></nav>
         <main class="workspace">
             <aside class="document-outline" id="document-outline" hidden>
@@ -110,6 +140,11 @@ const readerPanel = document.querySelector('#drop-target');
 const toast = document.querySelector('#toast');
 const topbar = document.querySelector('.topbar');
 const tabbar = document.querySelector('#tabbar');
+const recentButton = document.querySelector('#recent-button');
+const recentMenu = document.querySelector('#recent-menu');
+const recentList = document.querySelector('#recent-list');
+const recentEmpty = document.querySelector('#recent-empty');
+const recentClear = document.querySelector('#recent-clear');
 const themeSelect = document.querySelector('#theme-select');
 const backToTop = document.querySelector('#back-to-top');
 const exportButton = document.querySelector('#export-button');
@@ -127,6 +162,19 @@ const aboutVersion = document.querySelector('#about-version');
 let lastScrollTop = 0;
 let aboutReturnFocus = null;
 let clipboardPreviewCount = 0;
+
+function rememberScrollPosition() {
+    const activeTab = state.tabs.find((tab) => tab.path === state.path);
+    if (activeTab) activeTab.scrollTop = Math.max(0, readerPanel.scrollTop);
+}
+
+function restoreScrollPosition(tab, scrollTop) {
+    readerPanel.scrollTop = Math.max(0, scrollTop || 0);
+    tab.scrollTop = readerPanel.scrollTop;
+    lastScrollTop = readerPanel.scrollTop;
+    updateOutlineActive();
+    backToTop.classList.toggle('is-visible', readerPanel.scrollTop > readerPanel.clientHeight);
+}
 
 function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (character) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[character]));
@@ -604,6 +652,58 @@ function renderTabs() {
     });
 }
 
+function saveRecentFiles() {
+    try {
+        localStorage.setItem(recentFilesStorageKey, JSON.stringify(state.recentFiles));
+    } catch (_) {
+        // Recent files are a convenience and should not interrupt opening a document.
+    }
+}
+
+function renderRecentFiles() {
+    recentList.replaceChildren();
+    recentEmpty.hidden = state.recentFiles.length > 0;
+    recentClear.disabled = state.recentFiles.length === 0;
+    state.recentFiles.forEach((file) => {
+        const item = document.createElement('button');
+        item.className = 'recent-item';
+        item.type = 'button';
+        item.dataset.path = file.path;
+        item.title = file.path;
+
+        const name = document.createElement('span');
+        name.className = 'recent-item-name';
+        name.textContent = file.name || file.path;
+        const path = document.createElement('span');
+        path.className = 'recent-item-path';
+        path.textContent = file.path;
+        item.append(name, path);
+        recentList.append(item);
+    });
+}
+
+function rememberRecentFile(documentData) {
+    state.recentFiles = [
+        {path: documentData.path, name: documentData.name},
+        ...state.recentFiles.filter((file) => file.path !== documentData.path),
+    ].slice(0, maxRecentFiles);
+    saveRecentFiles();
+    renderRecentFiles();
+}
+
+function setRecentMenuOpen(open) {
+    const visible = Boolean(open);
+    if (visible) {
+        const buttonRect = recentButton.getBoundingClientRect();
+        recentMenu.hidden = false;
+        recentMenu.style.top = `${buttonRect.bottom + 7}px`;
+        recentMenu.style.left = `${Math.max(15, Math.min(buttonRect.left, window.innerWidth - recentMenu.offsetWidth - 15))}px`;
+    } else {
+        recentMenu.hidden = true;
+    }
+    recentButton.setAttribute('aria-expanded', String(visible));
+}
+
 async function clearDocument() {
     await StopWatching();
     state.path = '';
@@ -628,7 +728,9 @@ async function clearDocument() {
 }
 
 async function renderTemporaryDocument(tab) {
+    rememberScrollPosition();
     await StopWatching();
+    const previousScrollTop = tab.scrollTop || 0;
     state.path = tab.path;
     state.document = tab.document;
     body.innerHTML = renderMarkdown(tab.document.content);
@@ -641,14 +743,14 @@ async function renderTemporaryDocument(tab) {
     statusMeta.textContent = `${formatBytes(tab.document.size)}  ·  临时预览`;
     setStatus('已粘贴预览', 'ready');
     WindowSetTitle(`${tab.document.name} - Markdown Viewer`);
-    readerPanel.scrollTop = 0;
-    lastScrollTop = 0;
     topbar.classList.remove('is-hidden');
     exportButton.disabled = true;
-    backToTop.classList.remove('is-visible');
     renderTabs();
     updateOutlineActive();
-    hydrateImages();
+    await hydrateImages();
+    const restoreScroll = () => restoreScrollPosition(tab, previousScrollTop);
+    restoreScroll();
+    requestAnimationFrame(restoreScroll);
 }
 
 async function pasteMarkdown() {
@@ -673,6 +775,7 @@ async function pasteMarkdown() {
     const tab = {
         path: `clipboard://${Date.now()}-${clipboardPreviewCount}`,
         temporary: true,
+        scrollTop: 0,
         document: {
             path: '',
             name: `剪贴板 Markdown ${++clipboardPreviewCount}`,
@@ -687,6 +790,7 @@ async function pasteMarkdown() {
 }
 
 async function closeTab(path) {
+    rememberScrollPosition();
     const index = state.tabs.findIndex((tab) => tab.path === path);
     if (index < 0) return;
     const wasActive = state.tabs[index].path === state.path;
@@ -712,19 +816,23 @@ async function activateTab(path) {
 
 async function loadPath(path, announce = true) {
     if (!path) return;
+    rememberScrollPosition();
     const isReload = state.path === path && Boolean(state.document);
-    const previousScrollTop = isReload ? readerPanel.scrollTop : 0;
+    const targetTab = state.tabs.find((tab) => tab.path === path);
+    const previousScrollTop = isReload ? readerPanel.scrollTop : targetTab?.scrollTop || 0;
     setStatus('正在读取…', 'busy');
     try {
         const documentData = await ReadDocument(path);
+        rememberRecentFile(documentData);
         state.path = documentData.path;
         state.document = documentData;
         const existingTab = state.tabs.find((tab) => tab.path === documentData.path);
         if (existingTab) {
             existingTab.document = documentData;
         } else {
-            state.tabs.push({path: documentData.path, document: documentData});
+            state.tabs.push({path: documentData.path, document: documentData, scrollTop: 0});
         }
+        const activeTab = existingTab || state.tabs[state.tabs.length - 1];
         renderTabs();
         body.innerHTML = renderMarkdown(documentData.content);
         renderOutline();
@@ -741,10 +849,7 @@ async function loadPath(path, announce = true) {
         await StartWatching(documentData.path);
         await hydrateImages();
         const restoreScroll = () => {
-            readerPanel.scrollTop = previousScrollTop;
-            lastScrollTop = previousScrollTop;
-            updateOutlineActive();
-            backToTop.classList.toggle('is-visible', previousScrollTop > readerPanel.clientHeight);
+            restoreScrollPosition(activeTab, previousScrollTop);
         };
         restoreScroll();
         requestAnimationFrame(restoreScroll);
@@ -798,7 +903,30 @@ readerPanel.addEventListener('scroll', () => {
     }
     backToTop.classList.toggle('is-visible', currentScrollTop > readerPanel.clientHeight);
     updateOutlineActive();
+    const activeTab = state.tabs.find((tab) => tab.path === state.path);
+    if (activeTab) activeTab.scrollTop = currentScrollTop;
     lastScrollTop = currentScrollTop;
+});
+
+recentButton.addEventListener('click', () => setRecentMenuOpen(recentMenu.hidden));
+window.addEventListener('resize', () => {
+    if (!recentMenu.hidden) setRecentMenuOpen(true);
+});
+recentClear.addEventListener('click', () => {
+    state.recentFiles = [];
+    saveRecentFiles();
+    renderRecentFiles();
+});
+recentList.addEventListener('click', async (event) => {
+    const item = event.target.closest('.recent-item');
+    if (!item) return;
+    setRecentMenuOpen(false);
+    await openPath(item.dataset.path);
+});
+document.addEventListener('click', (event) => {
+    if (!recentMenu.hidden && !recentMenu.contains(event.target) && !recentButton.contains(event.target)) {
+        setRecentMenuOpen(false);
+    }
 });
 
 backToTop.addEventListener('click', () => {
@@ -859,6 +987,8 @@ aboutVersion.addEventListener('click', async (event) => {
     event.preventDefault();
     try { await OpenExternal(aboutVersion.href); } catch (_) { BrowserOpenURL(aboutVersion.href); }
 });
+
+renderRecentFiles();
 
 body.addEventListener('click', async (event) => {
     const copyButton = event.target.closest('.code-copy');
