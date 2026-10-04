@@ -22,14 +22,14 @@
         "name": "Markdown",
         "description": "Markdown document",
         "iconName": "appicon",
-        "role": "Editor"
+        "role": "Viewer"
       },
       {
         "ext": "markdown",
         "name": "Markdown",
         "description": "Markdown document",
         "iconName": "appicon",
-        "role": "Editor"
+        "role": "Viewer"
       }
     ]
   }

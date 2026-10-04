@@ -470,6 +470,54 @@ function taskLists(md) {
     };
 }
 markdown.use(taskLists);
+
+const detailsOpenPattern = /^<details(\s[^>]*)?>\s*(?:<summary(?:\s[^>]*)?>([\s\S]*?)<\/summary>\s*)?(<\/details>)?\s*$/i;
+const detailsClosePattern = /^<\/details>\s*$/i;
+const summaryPattern = /^<summary(?:\s[^>]*)?>([\s\S]*?)<\/summary>\s*$/i;
+
+function pushSummaryTokens(state, content) {
+    state.push('summary_open', 'summary', 1);
+    const inline = state.push('inline', '', 0);
+    inline.content = content;
+    inline.children = [];
+    state.push('summary_close', 'summary', -1);
+}
+
+function htmlDetails(state, startLine, endLine, silent) {
+    if (state.sCount[startLine] - state.blkIndent >= 4) return false;
+    const start = state.bMarks[startLine] + state.tShift[startLine];
+    const line = state.src.slice(start, state.eMarks[startLine]);
+    if (detailsClosePattern.test(line)) {
+        if (!silent) state.push('details_close', 'details', -1);
+        state.line = startLine + 1;
+        return true;
+    }
+    const open = line.match(detailsOpenPattern);
+    if (open) {
+        if (!silent) {
+            const token = state.push('details_open', 'details', 1);
+            token.attrJoin('class', 'md-details');
+            if (/\bopen\b/i.test(open[1] || '')) token.attrSet('open', 'open');
+            if (open[2] !== undefined) pushSummaryTokens(state, open[2]);
+            if (open[3]) state.push('details_close', 'details', -1);
+        }
+        state.line = startLine + 1;
+        return true;
+    }
+    const summary = line.match(summaryPattern);
+    if (summary) {
+        if (!silent) pushSummaryTokens(state, summary[1]);
+        state.line = startLine + 1;
+        return true;
+    }
+    return false;
+}
+
+markdown.block.ruler.before('html_block', 'html_details', htmlDetails);
+markdown.renderer.rules.details_open = (tokens, index) => `<details class="md-details"${tokens[index].attrGet('open') ? ' open' : ''}>\n`;
+markdown.renderer.rules.details_close = () => '</details>\n';
+markdown.renderer.rules.summary_open = () => '<summary class="md-summary">';
+markdown.renderer.rules.summary_close = () => '</summary>\n';
 markdown.renderer.rules.heading_open = (tokens, index, _options, env) => {
     const token = tokens[index];
     const heading = tokens[index + 1];
@@ -478,12 +526,31 @@ markdown.renderer.rules.heading_open = (tokens, index, _options, env) => {
     env.outline.push({level: Number(token.tag.slice(1)), id, text: headingText(heading)});
     return `<${token.tag} id="${escapeHtml(id)}">`;
 };
+function parseFenceInfo(info) {
+    const parsed = { collapsible: false, summary: '', language: '' };
+    const pattern = /([A-Za-z][\w-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+)))?/g;
+    let match;
+    while ((match = pattern.exec(String(info || '')))) {
+        const name = match[1].toLowerCase();
+        const value = match[2] ?? match[3] ?? match[4] ?? '';
+        if (name === 'details') parsed.collapsible = true;
+        else if (name === 'summary') parsed.summary = value;
+        else if (name === 'lang' || name === 'language') parsed.language = value;
+        else if (!parsed.language) parsed.language = match[1];
+    }
+    return parsed;
+}
+
 markdown.renderer.rules.fence = (tokens, index) => {
     const token = tokens[index];
-    const language = normalizeCodeLanguage(token.info.trim().split(/\s+/)[0]);
+    const info = parseFenceInfo(token.info);
+    const language = normalizeCodeLanguage(info.language);
     const label = codeLanguageLabels[language] || language;
     const code = token.content.replace(/\n$/, '');
-    return `<div class="code-block"><div class="code-toolbar"><span class="code-language">${escapeHtml(label)}</span><button class="code-copy" type="button">复制</button></div><pre><code class="language-${escapeHtml(language)}">${highlightCode(code, language)}</code></pre></div>\n`;
+    const block = `<div class="code-block"><div class="code-toolbar"><span class="code-language">${escapeHtml(label)}</span><button class="code-copy" type="button">复制</button></div><pre><code class="language-${escapeHtml(language)}">${highlightCode(code, language)}</code></pre></div>`;
+    if (!info.collapsible) return `${block}\n`;
+    const summary = info.summary.trim() || (label ? `${label} 代码` : '代码');
+    return `<details class="code-details"><summary class="code-summary">${escapeHtml(summary)}</summary>${block}</details>\n`;
 };
 markdown.renderer.rules.table_open = () => '<div class="table-wrap"><table>\n';
 markdown.renderer.rules.table_close = () => '</table></div>\n';
