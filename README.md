@@ -182,6 +182,34 @@ Windows 安装程序已经配置 `.md` 和 `.markdown` 文件关联；macOS 的 
 
 代码块使用 fenced code 的语言标记进行高亮，例如 ```` ```go ````；未标记语言或不支持的语言会以普通代码显示。打开文档后点击代码块右上角的 `复制` 按钮即可复制代码。
 
+代码块支持 GitHub 的 `details` 折叠语法：```` ```details ```` 会生成默认折叠的代码块，使用 `summary` 指定折叠标题，也可以同时指定语言用于高亮。
+
+````markdown
+```details summary="展开查看配置"
+plain text code
+```
+
+```details summary="展开查看高亮代码" lang=js
+console.log('hello');
+```
+````
+
+同时支持 GitHub 常见的 `<details>` / `<summary>` 折叠块，内部继续解析 Markdown，因此段落、列表、表格、引用和代码块都可以写在折叠块里：
+
+````markdown
+<details>
+<summary>创建 OFD</summary>
+
+这里是 **加粗** 段落。
+
+- 项目一
+- 项目二
+
+</details>
+````
+
+`<details open>` 表示默认展开；`<summary>` 标题需与 `</summary>` 写在同一行。除 `<details>` 和 `<summary>` 外，其他原始 HTML 仍按纯文本转义，不会执行脚本。
+
 点击工具栏的 `粘贴` 按钮，或使用 `Ctrl+Shift+V`，可以直接将系统剪贴板中的 Markdown 文本渲染为临时预览。每次粘贴都会创建一个新的临时 Tab，不会覆盖当前文档或之前的剪贴板预览；该内容不会写入文件。
 
 打开文档后点击工具栏中的 `PDF` 按钮，会打开系统打印对话框。选择 `Print to PDF` 或 `另存为 PDF` 即可导出当前文档。
